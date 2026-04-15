@@ -104,7 +104,13 @@ def set_mesh_config():
 def get_mesh_density():
     data = request.json or {}
     cells = data.get("cells", [])
-    return jsonify(router.get_mesh_densities(cells))
+    zoom_level = data.get("zoom_level")
+    edge_meters = data.get("edge_meters")
+    return jsonify(router.get_mesh_densities(
+        cells,
+        zoom_level=zoom_level,
+        edge_meters=edge_meters
+    ))
 
 # ── History ─────────────────────────────────────────
 

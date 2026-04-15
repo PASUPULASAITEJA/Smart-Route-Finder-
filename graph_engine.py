@@ -613,7 +613,9 @@ class SmartRouter:
 
         return (0.25 * blended_noise) + (0.95 * max_hotspot)
 
-    def _compute_mesh_density(self, row: int, col: int) -> float:
+    def _compute_mesh_density(self, row: int, col: int,
+                              zoom_level: Optional[float] = None,
+                              edge_meters: Optional[float] = None) -> float:
         frac1 = self._noise(row, col, 12.9898, 78.233, 0.0010, 43758.5453)
         frac2 = self._noise(row + 17, col - 9, 24.1320, 53.771, 0.0007, 12731.7430)
         blended = (frac1 * 0.65) + (frac2 * 0.35)
@@ -634,7 +636,17 @@ class SmartRouter:
         else:
             pattern = blended
 
-        scaled = pattern * (0.45 + self.mesh_intensity * 1.35)
+        zoom_factor = 1.0
+        if zoom_level is not None:
+            zoom_factor += max(0.0, min(1.0, (float(zoom_level) - 2.0) / 18.0)) * 0.35
+
+        refinement_factor = 1.0
+        if edge_meters is not None:
+            # Smaller cells represent higher refinement and slightly stronger local variance.
+            refined = max(50.0, min(100.0, float(edge_meters)))
+            refinement_factor += max(0.0, min(1.0, (100.0 - refined) / 50.0)) * 0.25
+
+        scaled = pattern * (0.45 + self.mesh_intensity * 1.35) * zoom_factor * refinement_factor
         return max(0.0, min(1.0, scaled))
 
     def get_mesh_config(self) -> dict:
@@ -669,7 +681,9 @@ class SmartRouter:
 
         return self.get_mesh_config()
 
-    def get_mesh_densities(self, cells: List[dict]) -> dict:
+    def get_mesh_densities(self, cells: List[dict],
+                           zoom_level: Optional[float] = None,
+                           edge_meters: Optional[float] = None) -> dict:
         densities = []
         for cell in cells:
             try:
@@ -681,7 +695,12 @@ class SmartRouter:
             densities.append({
                 "row": row,
                 "col": col,
-                "density": round(self._compute_mesh_density(row, col), 6)
+                "density": round(self._compute_mesh_density(
+                    row,
+                    col,
+                    zoom_level=zoom_level,
+                    edge_meters=edge_meters
+                ), 6)
             })
 
         return {
