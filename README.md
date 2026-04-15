@@ -15,37 +15,46 @@
 ![Cesium](https://img.shields.io/badge/Cesium-3D_Globe-0ea5e9)
 ![Algorithms](https://img.shields.io/badge/Algorithms-Dijkstra%20A*%20BFS%20DFS-c2410c)
 
-This project is a deterministic, synthetic, hexagonal traffic-routing model over a world map and 3D globe.
+This project is a hybrid routing engine over a world map and a 3D globe.
 
-It combines:
-- A global hex-mesh simulation layer.
-- Per-cell traffic density simulation.
-- 50-100 meter geometric scale constraints.
-- 50-100 meter geographic height mapping on globe hexes.
-- Search algorithms operating directly on the simulated hex graph.
+Current runtime behavior:
+- Route tab: real-road calibration via Nominatim geocoding + OSRM driving route.
+- Compare and Multi-Route tabs: synthetic hex-mesh routing using Dijkstra, A*, BFS, DFS.
+- Traffic and mesh controls: deterministic per-cell density simulation.
+- 3D globe: Cesium rendering of the same mesh core with automatic fallback to 2D if 3D fails.
 
 ---
 
 ## 1) Core Mathematical Model
 
-### 1.1 Hex Edge Scale Constraint
+### 1.1 Hex Edge Scale (Exact Current Runtime)
 
-Each hex cell edge length is constrained to:
+Base edge target is piecewise by zoom level in the frontend runtime:
+
+| Zoom range | Base edge target (meters) |
+|---|---:|
+| $z \le 2$ | 300000 |
+| $(2,3]$ | 180000 |
+| $(3,4]$ | 120000 |
+| $(4,5]$ | 80000 |
+| $(5,6]$ | 50000 |
+| $(6,7]$ | 30000 |
+| $(7,8]$ | 20000 |
+| $(8,9]$ | 12000 |
+| $(9,10]$ | 7000 |
+| $(10,11]$ | 4000 |
+| $(11,12]$ | 2400 |
+| $(12,13]$ | 1400 |
+| $(13,14]$ | 800 |
+| $(14,15]$ | 450 |
+| $(15,16]$ | 250 |
+| $(16,17]$ | 140 |
+| $z > 17$ | 90 |
+
+Refined edge length is:
 
 $$
-s \in [50, 100] \text{ meters}
-$$
-
-Zoom-adaptive target before refinement:
-
-$$
-s_{base}(z) = s_{max} - (\operatorname{clamp}(z,2,20)-2)\cdot 2.5
-$$
-
-Refined edge length:
-
-$$
-s = \operatorname{clamp}\left(\frac{s_{base}}{r}, 50, 100\right)
+s = \max\left(50,\frac{s_{base}(z)}{\max(0.6,r)}\right)
 $$
 
 where $r$ is the refinement factor.
@@ -55,11 +64,11 @@ where $r$ is the refinement factor.
 For hex index $(row, col)$, a deterministic blend produces density:
 
 $$
-n_1 = \operatorname{fract}(\sin(12.9898\,row + 78.233\,col + 0.001\,seed)\cdot 43758.5453)
+n_1 = \mathrm{fract}(\sin(12.9898\,row + 78.233\,col + 0.001\,seed)\cdot 43758.5453)
 $$
 
 $$
-n_2 = \operatorname{fract}(\sin(24.132\,(row+17) + 53.771\,(col-9) + 0.0007\,seed)\cdot 12731.743)
+n_2 = \mathrm{fract}(\sin(24.132\,(row+17) + 53.771\,(col-9) + 0.0007\,seed)\cdot 12731.743)
 $$
 
 $$
@@ -67,7 +76,7 @@ b = 0.65n_1 + 0.35n_2
 $$
 
 $$
-\rho = \operatorname{clamp}\left(b\cdot(0.45 + 1.35I), 0, 1\right)
+\rho = \mathrm{clamp}\left(b\cdot(0.45 + 1.35I), 0, 1\right)
 $$
 
 where $I$ is traffic intensity.
@@ -101,6 +110,8 @@ where $p_v$ is dynamic penalty used for alternative routes.
 ---
 
 ## 2) Algorithms and Working Method
+
+Note: these algorithms power the synthetic hex mesh workflows (Compare, Multi-Route, Traffic analysis). The Route tab uses live OSRM road routing after geocoding user inputs.
 
 | Algorithm | Objective | Score/Rule | Working Method in This Model |
 |---|---|---|---|
@@ -145,21 +156,27 @@ $$
 
 ```mermaid
 flowchart LR
-    U[User Inputs\nSource / Destination / Algorithm / Seed / Refinement] --> FE[Frontend Controller\napp.js]
-    FE --> MESH[Hex Mesh Builder\nGlobal Row/Col Window]
-    FE --> API[Flask API\napp.py]
-    API --> CFG[/api/mesh/config]
-    API --> DEN[/api/mesh/density]
-    API --> HIST[/api/history]
-    CFG --> ENGINE[SmartRouter\ngraph_engine.py]
+    U["User Inputs<br/>Source / Destination / Algorithm / Seed / Refinement"] --> FE["Frontend Controller<br/>app.js"]
+
+    FE --> NOM["Nominatim<br/>Geocoding"]
+    FE --> OSRM["OSRM<br/>Driving Route"]
+    OSRM --> R2D["Leaflet 2D Renderer"]
+    OSRM --> R3D["Cesium 3D Renderer<br/>Route Arc"]
+
+    FE --> MESH["Hex Mesh Builder<br/>Global Row/Col Window"]
+    FE --> API["Flask API<br/>app.py"]
+    API --> CFG["/api/mesh/config"]
+    API --> DEN["/api/mesh/density"]
+    API --> HIST["/api/history"]
+    CFG --> ENGINE["SmartRouter<br/>graph_engine.py"]
     DEN --> ENGINE
-    ENGINE --> SIM[Density Simulator\nseed + intensity + pattern]
+    ENGINE --> SIM["Density Simulator<br/>seed + intensity + pattern"]
     MESH --> SIM
-    SIM --> CELLS[Hex Cells\n(simulatedDensity, geoHeightMeters)]
-    CELLS --> SEARCH[Search Core\nDijkstra / A* / BFS / DFS]
-    SEARCH --> ROUTE[Route Result\npathIds + metrics]
-    ROUTE --> R2D[Leaflet 2D Renderer]
-    ROUTE --> R3D[Cesium 3D Renderer\nIndia-locked view]
+    SIM --> CELLS["Hex Cells<br/>(simulatedDensity, geoHeightMeters)"]
+    CELLS --> SEARCH["Search Core<br/>Dijkstra / A* / BFS / DFS"]
+    SEARCH --> ROUTE["Route Result<br/>pathIds + metrics"]
+    ROUTE --> R2D
+    ROUTE --> R3D
     CELLS --> R3D
 
     classDef frontend fill:#ede9fe,stroke:#7c3aed,stroke-width:2,color:#1f1147
@@ -170,6 +187,7 @@ flowchart LR
     classDef state fill:#f3f4f6,stroke:#374151,stroke-width:2,color:#111827
 
     class FE,MESH frontend
+    class NOM,OSRM api
     class API,CFG,DEN,HIST api
     class ENGINE,SIM,CELLS sim
     class SEARCH,ROUTE algo
@@ -186,21 +204,33 @@ sequenceDiagram
     participant UI as UI Panel
     participant FE as Frontend Engine
     participant API as Flask API
+    participant NOM as Nominatim
+    participant OSRM as OSRM
     participant SIM as Density Simulator
     participant ALG as Search Core
     participant V2D as Leaflet 2D
     participant V3D as Cesium 3D
 
-    UI->>FE: apply controls (seed/refinement/pattern)
-    FE->>API: POST /api/mesh/config
-    FE->>API: POST /api/mesh/density(cells, zoom, edge_m)
-    API->>SIM: compute deterministic densities
-    SIM-->>FE: density map
-    FE->>FE: simulateHexCellMetrics per cell
-    FE->>ALG: run selected algorithm on hex graph
-    ALG-->>FE: pathIds + weighted metrics
-    FE->>V2D: draw route and mesh style
-    FE->>V3D: draw globe mesh + arc route
+    UI->>FE: enter source and destination
+    FE->>NOM: geocode input text
+    NOM-->>FE: coordinates
+
+    alt Route tab (real road mode)
+        FE->>OSRM: request driving route
+        OSRM-->>FE: geometry + distance + duration
+        FE->>V2D: draw calibrated road route
+        FE->>V3D: draw globe route arc
+    else Compare/Multi/Traffic (hex mesh mode)
+        FE->>API: POST /api/mesh/config
+        FE->>API: POST /api/mesh/density(cells, zoom, edge_m)
+        API->>SIM: compute deterministic densities
+        SIM-->>FE: density map
+        FE->>ALG: run selected algorithm on hex graph
+        ALG-->>FE: pathIds + weighted metrics
+        FE->>V2D: draw mesh route and metrics
+        FE->>V3D: draw mesh + route overlays
+    end
+
     V3D->>V3D: adaptive LOD refresh
 ```
 
@@ -211,15 +241,15 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> Init
-    Init --> MeshReady: refreshHexMesh()
-    MeshReady --> SearchReady: source+destination resolved
-    SearchReady --> RouteComputed: runHexPathSearch()
-    RouteComputed --> View2D: render 2D
-    RouteComputed --> View3D: toggleGlobeMode()
-    View3D --> LockedIndia: setGlobeIndiaStationaryView()
-    LockedIndia --> LockedIndia: camera interactions disabled
+    Init --> Try3D: enable3DFirstView()
+    Try3D --> View3D: 3D init success
+    Try3D --> View2D: 3D init failure
+
+    View3D --> LockedIndia: stationary India view
     LockedIndia --> LockedIndia: renderGlobeHexMesh(LOD)
-    LockedIndia --> View2D: switch to 2D
+    LockedIndia --> View2D: 3D runtime failure
+
+    View2D --> View3D: user retries 3D
 ```
 
 ---
@@ -310,10 +340,10 @@ http://127.0.0.1:5000
 ```
 
 Presentation flow:
-- Show mesh regeneration with seed and refinement.
-- Show density-height coupling per hex.
-- Run Dijkstra/A*/BFS/DFS and compare weighted behavior.
-- Switch to 3D and show stationary India-focused globe mesh with adaptive LOD.
+- Route tab: enter source/destination and show calibrated real driving route.
+- Compare/Multi tabs: show hex-mesh algorithm behavior (Dijkstra/A*/BFS/DFS).
+- Traffic tab: demonstrate density and height coupling per hex.
+- 3D: show stationary India-focused globe mesh with adaptive LOD and automatic 2D fallback on 3D failure.
 
 ---
 
