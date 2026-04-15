@@ -88,11 +88,15 @@ def set_mesh_config():
     data = request.json or {}
     intensity = data.get("intensity")
     seed = data.get("seed")
+    pattern_mode = data.get("pattern_mode")
+    refinement_factor = data.get("refinement_factor")
     regenerate_seed = bool(data.get("regenerate_seed", False))
     result = router.update_mesh_config(
         intensity=intensity,
         seed=seed,
-        regenerate_seed=regenerate_seed
+        regenerate_seed=regenerate_seed,
+        pattern_mode=pattern_mode,
+        refinement_factor=refinement_factor
     )
     return jsonify(result)
 

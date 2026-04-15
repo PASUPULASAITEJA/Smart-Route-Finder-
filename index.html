@@ -126,11 +126,32 @@
                    oninput="document.getElementById('traffic-val').textContent = this.value + '%'">
             <span id="traffic-val">35%</span>
           </div>
-          <div class="traffic-intensity">
-            <label>Hex Resolution</label>
-            <input type="range" id="mesh-res-slider" min="60" max="180" value="100"
-                   oninput="setHexResolution(this.value)">
-            <span id="mesh-res-val">1.00x</span>
+          <div class="card synth-controls-card">
+            <div class="card-header"><span>SD</span> SYNTHETIC DESIGN CONTROLS</div>
+            <div class="field">
+              <label>World Seed</label>
+              <input type="number" id="mesh-seed-input" min="1" step="1"
+                     placeholder="e.g. 424242"
+                     style="background:var(--surface3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px;width:100%;" />
+            </div>
+            <div class="traffic-intensity">
+              <label>Hex Refinement</label>
+              <input type="range" id="mesh-refine-slider" min="60" max="180" value="100"
+                     oninput="setHexRefinement(this.value)">
+              <span id="mesh-refine-val">1.00x</span>
+            </div>
+            <div class="field">
+              <label>Density Pattern</label>
+              <select id="mesh-pattern-mode">
+                <option value="radial">Radial</option>
+                <option value="corridor">Corridor</option>
+                <option value="clustered_hotspots">Clustered Hotspots</option>
+              </select>
+            </div>
+            <div class="btn-row">
+              <button class="btn btn-secondary" onclick="regenerateSyntheticSeed()">Regenerate Seed</button>
+              <button class="btn btn-primary" onclick="applySyntheticDesignControls()">Apply Design</button>
+            </div>
           </div>
           <button class="btn btn-warn" onclick="simulateTraffic()">=ƒÜª SIMULATE TRAFFIC</button>
           <button class="btn btn-danger" onclick="resetConditions()">Gå¦ RESET ALL CONDITIONS</button>

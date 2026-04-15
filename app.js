@@ -12,6 +12,7 @@ let selectedMultiRouteIdx = 0;
 let multiRoutes = [];
 let meshTrafficIntensity = 0.35;
 let meshSeed = 424242;
+let meshPatternMode = 'radial';
 let meshResolutionFactor = 1.0;
 let hexCells = [];
 let hexCellById = new Map();
@@ -40,6 +41,8 @@ async function loadMeshConfigFromServer() {
     const cfg = await res.json();
     if (typeof cfg.intensity === 'number') meshTrafficIntensity = cfg.intensity;
     if (typeof cfg.seed === 'number') meshSeed = cfg.seed;
+    if (typeof cfg.pattern_mode === 'string') meshPatternMode = cfg.pattern_mode;
+    if (typeof cfg.refinement_factor === 'number') meshResolutionFactor = cfg.refinement_factor;
     const slider = document.getElementById('traffic-slider');
     const val = document.getElementById('traffic-val');
     if (slider && val) {
@@ -47,9 +50,46 @@ async function loadMeshConfigFromServer() {
       slider.value = String(pct);
       val.textContent = `${pct}%`;
     }
+    syncSyntheticControlFields();
   } catch (_) {
     // Keep local defaults if backend mesh config is unavailable.
   }
+}
+
+function syncSyntheticControlFields() {
+  const seedInput = document.getElementById('mesh-seed-input');
+  const refineSlider = document.getElementById('mesh-refine-slider');
+  const refineVal = document.getElementById('mesh-refine-val');
+  const patternSelect = document.getElementById('mesh-pattern-mode');
+
+  if (seedInput) seedInput.value = String(Math.trunc(meshSeed));
+  if (refineSlider) refineSlider.value = String(Math.round(meshResolutionFactor * 100));
+  if (refineVal) refineVal.textContent = `${meshResolutionFactor.toFixed(2)}x`;
+  if (patternSelect) patternSelect.value = meshPatternMode;
+}
+
+async function persistMeshConfig(extra = {}) {
+  const body = {
+    seed: Math.trunc(meshSeed),
+    intensity: meshTrafficIntensity,
+    pattern_mode: meshPatternMode,
+    refinement_factor: meshResolutionFactor,
+    ...extra
+  };
+
+  const res = await fetch(`${API}/mesh/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const cfg = await res.json();
+
+  if (typeof cfg.seed === 'number') meshSeed = cfg.seed;
+  if (typeof cfg.intensity === 'number') meshTrafficIntensity = cfg.intensity;
+  if (typeof cfg.pattern_mode === 'string') meshPatternMode = cfg.pattern_mode;
+  if (typeof cfg.refinement_factor === 'number') meshResolutionFactor = cfg.refinement_factor;
+
+  syncSyntheticControlFields();
 }
 
 async function loadGraphFromServer() {
@@ -109,6 +149,9 @@ async function fetchMeshDensities(cells) {
     const payload = await res.json();
     if (typeof payload.intensity === 'number') meshTrafficIntensity = payload.intensity;
     if (typeof payload.seed === 'number') meshSeed = payload.seed;
+    if (typeof payload.pattern_mode === 'string') meshPatternMode = payload.pattern_mode;
+    if (typeof payload.refinement_factor === 'number') meshResolutionFactor = payload.refinement_factor;
+    syncSyntheticControlFields();
 
     const mapByKey = new Map();
     for (const d of payload.densities || []) {
@@ -234,9 +277,43 @@ async function refreshHexMesh() {
 function setHexResolution(rawValue) {
   const pct = Number(rawValue);
   meshResolutionFactor = Math.max(0.6, Math.min(1.8, pct / 100));
-  const val = document.getElementById('mesh-res-val');
+  const val = document.getElementById('mesh-refine-val');
   if (val) val.textContent = `${meshResolutionFactor.toFixed(2)}x`;
   refreshHexMesh();
+}
+
+function setHexRefinement(rawValue) {
+  setHexResolution(rawValue);
+}
+
+async function applySyntheticDesignControls() {
+  try {
+    const seedInput = document.getElementById('mesh-seed-input');
+    const refineSlider = document.getElementById('mesh-refine-slider');
+    const patternSelect = document.getElementById('mesh-pattern-mode');
+
+    if (seedInput && seedInput.value.trim()) {
+      meshSeed = Math.max(1, Number(seedInput.value));
+    }
+    if (refineSlider) {
+      meshResolutionFactor = Math.max(0.6, Math.min(1.8, Number(refineSlider.value) / 100));
+    }
+    if (patternSelect) {
+      meshPatternMode = patternSelect.value;
+    }
+
+    await persistMeshConfig();
+    await refreshHexMesh();
+    showToast('Synthetic design controls applied', 'success');
+  } catch (e) {
+    showToast(`Failed to apply design controls: ${e.message}`, 'error');
+  }
+}
+
+async function regenerateSyntheticSeed() {
+  meshSeed = Math.floor(Math.random() * 999999) + 1;
+  syncSyntheticControlFields();
+  await applySyntheticDesignControls();
 }
 
 function findNearestHexCell(lat, lon) {
@@ -1239,12 +1316,15 @@ async function simulateTraffic() {
     if (data.mesh) {
       meshTrafficIntensity = typeof data.mesh.intensity === 'number' ? data.mesh.intensity : intensity;
       if (typeof data.mesh.seed === 'number') meshSeed = data.mesh.seed;
+      if (typeof data.mesh.pattern_mode === 'string') meshPatternMode = data.mesh.pattern_mode;
+      if (typeof data.mesh.refinement_factor === 'number') meshResolutionFactor = data.mesh.refinement_factor;
     } else {
       meshTrafficIntensity = intensity;
     }
 
     const val = document.getElementById('traffic-val');
     if (val) val.textContent = `${Math.round(meshTrafficIntensity * 100)}%`;
+    syncSyntheticControlFields();
 
     await refreshHexMesh();
     graphData = data.graph; // Update local graph data
@@ -1297,6 +1377,8 @@ async function resetConditions() {
     if (resetData.mesh) {
       meshTrafficIntensity = typeof resetData.mesh.intensity === 'number' ? resetData.mesh.intensity : 0.35;
       if (typeof resetData.mesh.seed === 'number') meshSeed = resetData.mesh.seed;
+      if (typeof resetData.mesh.pattern_mode === 'string') meshPatternMode = resetData.mesh.pattern_mode;
+      if (typeof resetData.mesh.refinement_factor === 'number') meshResolutionFactor = resetData.mesh.refinement_factor;
     }
 
     const slider = document.getElementById('traffic-slider');
@@ -1306,6 +1388,7 @@ async function resetConditions() {
       slider.value = String(pct);
       val.textContent = `${pct}%`;
     }
+    syncSyntheticControlFields();
 
     await refreshHexMesh();
 

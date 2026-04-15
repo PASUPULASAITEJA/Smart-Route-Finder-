@@ -264,6 +264,11 @@
     flex: 1; padding: 0; height: 4px; background: var(--surface3);
     border: none; border-radius: 2px; accent-color: var(--warn);
   }
+  .synth-controls-card {
+    margin-bottom: 12px;
+    background: linear-gradient(180deg, rgba(255,209,102,0.05), rgba(15,18,24,0.65));
+    border-color: rgba(255,209,102,0.22);
+  }
 
   /* â”€â”€ HISTORY â”€â”€ */
   .history-item {
