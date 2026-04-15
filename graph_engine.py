@@ -585,6 +585,131 @@ class SmartRouter:
     def __init__(self):
         self.graph = build_world_graph()
         self.history = RouteHistory()
+        self.mesh_intensity = 0.35
+        self.mesh_seed = random.randint(1, 999999)
+        self.mesh_pattern_mode = "radial"
+        self.mesh_refinement_factor = 1.0
+
+    def _fract(self, value: float) -> float:
+        return value - math.floor(value)
+
+    def _noise(self, row: int, col: int, a: float, b: float, c: float, scale: float) -> float:
+        return self._fract(math.sin(row * a + col * b + self.mesh_seed * c) * scale)
+
+    def _clustered_hotspot_density(self, row: int, col: int, blended_noise: float) -> float:
+        rng = random.Random(self.mesh_seed)
+        max_hotspot = 0.0
+        period = 360
+
+        for _ in range(4):
+            center_r = rng.randint(-180, 180)
+            center_c = rng.randint(-180, 180)
+            spread = rng.uniform(16.0, 40.0)
+
+            dr = ((row - center_r + (period / 2)) % period) - (period / 2)
+            dc = ((col - center_c + (period / 2)) % period) - (period / 2)
+            influence = math.exp(-math.hypot(dr, dc) / spread)
+            max_hotspot = max(max_hotspot, influence)
+
+        return (0.25 * blended_noise) + (0.95 * max_hotspot)
+
+    def _compute_mesh_density(self, row: int, col: int,
+                              zoom_level: Optional[float] = None,
+                              edge_meters: Optional[float] = None) -> float:
+        frac1 = self._noise(row, col, 12.9898, 78.233, 0.0010, 43758.5453)
+        frac2 = self._noise(row + 17, col - 9, 24.1320, 53.771, 0.0007, 12731.7430)
+        blended = (frac1 * 0.65) + (frac2 * 0.35)
+
+        mode = self.mesh_pattern_mode
+        if mode == "radial":
+            center_r = (self.mesh_seed % 240) - 120
+            center_c = ((self.mesh_seed // 10) % 240) - 120
+            distance = math.hypot(row - center_r, col - center_c)
+            radial = math.exp(-distance / 55.0)
+            pattern = (0.25 * blended) + (0.95 * radial)
+        elif mode == "corridor":
+            corridor_center = math.sin((row + self.mesh_seed * 0.002) * 0.22) * 80.0
+            corridor_band = math.exp(-abs(col - corridor_center) / 18.0)
+            pattern = (0.35 * blended) + (0.90 * corridor_band)
+        elif mode == "clustered_hotspots":
+            pattern = self._clustered_hotspot_density(row, col, blended)
+        else:
+            pattern = blended
+
+        zoom_factor = 1.0
+        if zoom_level is not None:
+            zoom_factor += max(0.0, min(1.0, (float(zoom_level) - 2.0) / 18.0)) * 0.35
+
+        refinement_factor = 1.0
+        if edge_meters is not None:
+            # Smaller cells represent higher refinement and slightly stronger local variance.
+            refined = max(50.0, min(100.0, float(edge_meters)))
+            refinement_factor += max(0.0, min(1.0, (100.0 - refined) / 50.0)) * 0.25
+
+        scaled = pattern * (0.45 + self.mesh_intensity * 1.35) * zoom_factor * refinement_factor
+        return max(0.0, min(1.0, scaled))
+
+    def get_mesh_config(self) -> dict:
+        return {
+            "seed": int(self.mesh_seed),
+            "intensity": round(float(self.mesh_intensity), 4),
+            "pattern_mode": self.mesh_pattern_mode,
+            "refinement_factor": round(float(self.mesh_refinement_factor), 4)
+        }
+
+    def update_mesh_config(self, intensity: Optional[float] = None,
+                           seed: Optional[int] = None,
+                           regenerate_seed: bool = False,
+                           pattern_mode: Optional[str] = None,
+                           refinement_factor: Optional[float] = None) -> dict:
+        if intensity is not None:
+            self.mesh_intensity = max(0.0, min(1.0, float(intensity)))
+
+        if pattern_mode is not None:
+            candidate = str(pattern_mode).strip().lower()
+            allowed = {"radial", "corridor", "clustered_hotspots"}
+            if candidate in allowed:
+                self.mesh_pattern_mode = candidate
+
+        if refinement_factor is not None:
+            self.mesh_refinement_factor = max(0.6, min(1.8, float(refinement_factor)))
+
+        if seed is not None:
+            self.mesh_seed = int(seed)
+        elif regenerate_seed:
+            self.mesh_seed = random.randint(1, 999999)
+
+        return self.get_mesh_config()
+
+    def get_mesh_densities(self, cells: List[dict],
+                           zoom_level: Optional[float] = None,
+                           edge_meters: Optional[float] = None) -> dict:
+        densities = []
+        for cell in cells:
+            try:
+                row = int(cell.get("row"))
+                col = int(cell.get("col"))
+            except (TypeError, ValueError):
+                continue
+
+            densities.append({
+                "row": row,
+                "col": col,
+                "density": round(self._compute_mesh_density(
+                    row,
+                    col,
+                    zoom_level=zoom_level,
+                    edge_meters=edge_meters
+                ), 6)
+            })
+
+        return {
+            "seed": int(self.mesh_seed),
+            "intensity": round(float(self.mesh_intensity), 4),
+            "pattern_mode": self.mesh_pattern_mode,
+            "refinement_factor": round(float(self.mesh_refinement_factor), 4),
+            "densities": densities
+        }
 
     def find_route(self, source: str, destination: str,
                    algorithm: str = "dijkstra") -> dict:
@@ -617,11 +742,16 @@ class SmartRouter:
 
     def simulate_traffic(self, intensity: float = 0.35) -> dict:
         self.graph.randomize_traffic(intensity)
+        self.update_mesh_config(intensity=intensity, regenerate_seed=True)
         return {"status": "Traffic simulated", "graph": self.graph.to_dict()}
 
     def reset_conditions(self) -> dict:
         self.graph.reset_traffic()
-        return {"status": "Reset complete"}
+        self.update_mesh_config(intensity=0.35, regenerate_seed=True)
+        return {
+            "status": "Reset complete",
+            "mesh": self.get_mesh_config()
+        }
 
     def block_road(self, from_id: str, to_id: str) -> dict:
         self.graph.block_edge(from_id, to_id, True)
