@@ -585,6 +585,57 @@ class SmartRouter:
     def __init__(self):
         self.graph = build_world_graph()
         self.history = RouteHistory()
+        self.mesh_intensity = 0.35
+        self.mesh_seed = random.randint(1, 999999)
+
+    def _compute_mesh_density(self, row: int, col: int) -> float:
+        noise1 = math.sin(row * 12.9898 + col * 78.233 + self.mesh_seed * 0.001)
+        noise2 = math.sin((row + 17) * 24.132 + (col - 9) * 53.771 + self.mesh_seed * 0.0007)
+        frac1 = noise1 - math.floor(noise1)
+        frac2 = noise2 - math.floor(noise2)
+        blended = (frac1 * 0.65) + (frac2 * 0.35)
+        scaled = blended * (0.45 + self.mesh_intensity * 1.35)
+        return max(0.0, min(1.0, scaled))
+
+    def get_mesh_config(self) -> dict:
+        return {
+            "seed": int(self.mesh_seed),
+            "intensity": round(float(self.mesh_intensity), 4)
+        }
+
+    def update_mesh_config(self, intensity: Optional[float] = None,
+                           seed: Optional[int] = None,
+                           regenerate_seed: bool = False) -> dict:
+        if intensity is not None:
+            self.mesh_intensity = max(0.0, min(1.0, float(intensity)))
+
+        if seed is not None:
+            self.mesh_seed = int(seed)
+        elif regenerate_seed:
+            self.mesh_seed = random.randint(1, 999999)
+
+        return self.get_mesh_config()
+
+    def get_mesh_densities(self, cells: List[dict]) -> dict:
+        densities = []
+        for cell in cells:
+            try:
+                row = int(cell.get("row"))
+                col = int(cell.get("col"))
+            except (TypeError, ValueError):
+                continue
+
+            densities.append({
+                "row": row,
+                "col": col,
+                "density": round(self._compute_mesh_density(row, col), 6)
+            })
+
+        return {
+            "seed": int(self.mesh_seed),
+            "intensity": round(float(self.mesh_intensity), 4),
+            "densities": densities
+        }
 
     def find_route(self, source: str, destination: str,
                    algorithm: str = "dijkstra") -> dict:
@@ -617,11 +668,16 @@ class SmartRouter:
 
     def simulate_traffic(self, intensity: float = 0.35) -> dict:
         self.graph.randomize_traffic(intensity)
+        self.update_mesh_config(intensity=intensity, regenerate_seed=True)
         return {"status": "Traffic simulated", "graph": self.graph.to_dict()}
 
     def reset_conditions(self) -> dict:
         self.graph.reset_traffic()
-        return {"status": "Reset complete"}
+        self.update_mesh_config(intensity=0.35, regenerate_seed=True)
+        return {
+            "status": "Reset complete",
+            "mesh": self.get_mesh_config()
+        }
 
     def block_road(self, from_id: str, to_id: str) -> dict:
         self.graph.block_edge(from_id, to_id, True)
