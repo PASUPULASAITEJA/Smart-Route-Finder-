@@ -14,6 +14,7 @@ let meshTrafficIntensity = 0.35;
 let meshSeed = 424242;
 let meshPatternMode = 'radial';
 let meshResolutionFactor = 1.0;
+let currentHexEdgeMeters = 75;
 let hexCells = [];
 let hexCellById = new Map();
 let hexLayer;
@@ -25,6 +26,29 @@ let map;
 let nodeMarkers = {};
 let edgeLines = [];
 let bounds;
+let globeViewer = null;
+let globeMode = false;
+let latestRouteCoords = [];
+let globeAutoRotate = false;
+let globeTickHandler = null;
+let globeNightMode = true;
+let globeRouteDataSource = null;
+let globeMeshDataSource = null;
+let globeMeshRefreshTimer = null;
+let globeMeshLodKey = '';
+const INDIA_FOCUS = {
+  lon: 78.9629,
+  lat: 22.5937,
+  height: 9000000,
+  heading: 0,
+  pitch: -90,
+  roll: 0
+};
+
+const HEX_EDGE_MIN_METERS = 50;
+const HEX_EDGE_MAX_METERS = 100;
+const HEX_GEO_HEIGHT_MIN_METERS = 50;
+const HEX_GEO_HEIGHT_MAX_METERS = 100;
 
 // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 // INIT
@@ -33,6 +57,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   await loadMeshConfigFromServer();
   initMap();
   await loadGraphFromServer();
+  enable3DFirstView();
 });
 
 async function loadMeshConfigFromServer() {
@@ -64,7 +89,7 @@ function syncSyntheticControlFields() {
 
   if (seedInput) seedInput.value = String(Math.trunc(meshSeed));
   if (refineSlider) refineSlider.value = String(Math.round(meshResolutionFactor * 100));
-  if (refineVal) refineVal.textContent = `${meshResolutionFactor.toFixed(2)}x`;
+  if (refineVal) refineVal.textContent = `${currentHexEdgeMeters.toFixed(0)}m`;
   if (patternSelect) patternSelect.value = meshPatternMode;
 }
 
@@ -108,10 +133,46 @@ async function loadGraphFromServer() {
 
 function initMap() {
   map = L.map('map', { zoomControl: false }).setView([20, 0], 2);
-  L.tileLayer('http://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
-    attribution: '&copy; Google Maps',
-    maxZoom: 20
+  const onlineTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 20,
+    noWrap: true,
+    bounds: [[-85, -180], [85, 180]]
   }).addTo(map);
+
+  const offlineGrid = L.gridLayer({
+    noWrap: true,
+    bounds: [[-85, -180], [85, 180]],
+    attribution: 'Offline grid layer'
+  });
+
+  offlineGrid.createTile = function(coords) {
+    const tile = document.createElement('canvas');
+    const size = this.getTileSize();
+    tile.width = size.x;
+    tile.height = size.y;
+
+    const ctx = tile.getContext('2d');
+    ctx.fillStyle = '#0f1218';
+    ctx.fillRect(0, 0, size.x, size.y);
+    ctx.strokeStyle = 'rgba(124, 244, 160, 0.08)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0, 0, size.x, size.y);
+    ctx.fillStyle = 'rgba(107, 122, 144, 0.65)';
+    ctx.font = '12px monospace';
+    ctx.fillText(`z${coords.z} x${coords.x} y${coords.y}`, 10, 20);
+    return tile;
+  };
+
+  onlineTiles.on('tileerror', () => {
+    if (!map.hasLayer(offlineGrid)) {
+      offlineGrid.addTo(map);
+      showToast('Offline tile mode enabled', 'warn');
+    }
+  });
+
+  map.setMaxBounds([[-85, -180], [85, 180]]);
+  map.options.maxBoundsViscosity = 1.0;
 
   hexLayer = L.layerGroup().addTo(map);
   refreshHexMesh();
@@ -120,15 +181,411 @@ function initMap() {
   });
 }
 
+function initGlobeViewer() {
+  if (globeViewer || typeof Cesium === 'undefined') return;
+
+  globeViewer = new Cesium.Viewer('globe3d', {
+    imageryProvider: new Cesium.UrlTemplateImageryProvider({
+      url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      credit: 'Esri World Imagery'
+    }),
+    terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+    baseLayerPicker: false,
+    geocoder: false,
+    homeButton: false,
+    timeline: false,
+    animation: false,
+    sceneModePicker: false,
+    navigationHelpButton: false,
+    fullscreenButton: false,
+    infoBox: false,
+    selectionIndicator: false,
+    shouldAnimate: true
+  });
+
+  globeViewer.scene.globe.enableLighting = true;
+  globeViewer.scene.globe.showGroundAtmosphere = true;
+  globeViewer.scene.skyAtmosphere.show = true;
+  globeViewer.scene.moon.show = true;
+  globeViewer.scene.backgroundColor = Cesium.Color.BLACK;
+  globeViewer.scene.globe.baseColor = Cesium.Color.BLACK;
+
+  globeViewer.scene.globe.atmosphereHueShift = 0.0;
+  globeViewer.scene.globe.atmosphereSaturationShift = 0.08;
+  globeViewer.scene.globe.atmosphereBrightnessShift = -0.03;
+
+  globeViewer.clock.multiplier = 1200;
+  globeViewer.clock.shouldAnimate = true;
+
+  globeViewer.scene.fxaa = true;
+  globeViewer.scene.postProcessStages.fxaa.enabled = true;
+
+  const bloom = globeViewer.scene.postProcessStages.bloom;
+  bloom.enabled = true;
+  bloom.uniforms.glowOnly = false;
+  bloom.uniforms.contrast = 128;
+  bloom.uniforms.brightness = -0.2;
+  bloom.uniforms.delta = 1.0;
+  bloom.uniforms.sigma = 2.2;
+  bloom.uniforms.stepSize = 1.0;
+
+  globeTickHandler = function() {
+    if (!globeAutoRotate) return;
+    globeViewer.scene.camera.rotate(Cesium.Cartesian3.UNIT_Z, -0.00035);
+  };
+  globeViewer.clock.onTick.addEventListener(globeTickHandler);
+
+  const ctrl = globeViewer.scene.screenSpaceCameraController;
+  ctrl.enableRotate = false;
+  ctrl.enableTranslate = false;
+  ctrl.enableZoom = false;
+  ctrl.enableTilt = false;
+  ctrl.enableLook = false;
+  ctrl.inertiaSpin = 0;
+  ctrl.inertiaTranslate = 0;
+  ctrl.inertiaZoom = 0;
+
+  globeRouteDataSource = new Cesium.CustomDataSource('route-overlay');
+  globeMeshDataSource = new Cesium.CustomDataSource('hex-mesh-overlay');
+  globeViewer.dataSources.add(globeMeshDataSource);
+  globeViewer.dataSources.add(globeRouteDataSource);
+
+  setGlobeIndiaStationaryView();
+
+  globeViewer.camera.percentageChanged = 0.02;
+  globeViewer.camera.changed.addEventListener(() => {
+    scheduleGlobeMeshRefresh();
+  });
+}
+
+function setGlobeIndiaStationaryView() {
+  if (!globeViewer || typeof Cesium === 'undefined') return;
+  globeViewer.camera.setView({
+    destination: Cesium.Cartesian3.fromDegrees(INDIA_FOCUS.lon, INDIA_FOCUS.lat, INDIA_FOCUS.height),
+    orientation: {
+      heading: Cesium.Math.toRadians(INDIA_FOCUS.heading),
+      pitch: Cesium.Math.toRadians(INDIA_FOCUS.pitch),
+      roll: Cesium.Math.toRadians(INDIA_FOCUS.roll)
+    }
+  });
+}
+
+function setStationaryGlobeControlState(isLocked3D) {
+  const canvasArea = document.querySelector('.canvas-area');
+  const rotateBtn = document.getElementById('rotate-btn');
+  const flyBtn = document.getElementById('fly-btn');
+
+  if (canvasArea) {
+    canvasArea.classList.toggle('locked-globe-controls', Boolean(isLocked3D));
+  }
+
+  for (const btn of [rotateBtn, flyBtn]) {
+    if (!btn) continue;
+    btn.classList.toggle('hidden-locked', Boolean(isLocked3D));
+    btn.disabled = Boolean(isLocked3D);
+    btn.setAttribute('aria-hidden', isLocked3D ? 'true' : 'false');
+    btn.setAttribute('tabindex', isLocked3D ? '-1' : '0');
+  }
+}
+
+function enable3DFirstView() {
+  if (!globeMode) {
+    toggleGlobeMode();
+    showToast('3D globe mode enabled', 'success');
+  }
+}
+
+function renderGlobeRoute() {
+  if (!globeViewer || !globeRouteDataSource) return;
+
+  const routeEntities = globeRouteDataSource.entities;
+  routeEntities.removeAll();
+
+  if (!latestRouteCoords.length) {
+    setGlobeIndiaStationaryView();
+    return;
+  }
+
+  const polylinePositions = latestRouteCoords.map(c => Cesium.Cartesian3.fromDegrees(c[1], c[0], 12000));
+
+  const arcDegrees = [];
+  const arcPeak = 90000;
+  const arcBase = 14000;
+  const maxIndex = Math.max(1, latestRouteCoords.length - 1);
+  for (let i = 0; i < latestRouteCoords.length; i++) {
+    const ratio = i / maxIndex;
+    const arcHeight = arcBase + Math.sin(ratio * Math.PI) * arcPeak;
+    arcDegrees.push(latestRouteCoords[i][1], latestRouteCoords[i][0], arcHeight);
+  }
+
+  routeEntities.add({
+    polyline: {
+      positions: Cesium.Cartesian3.fromDegreesArrayHeights(arcDegrees),
+      width: 4,
+      material: new Cesium.PolylineGlowMaterialProperty({
+        glowPower: 0.14,
+        taperPower: 0.5,
+        color: Cesium.Color.fromCssColorString('#52c7ff')
+      })
+    }
+  });
+
+  routeEntities.add({
+    polyline: {
+      positions: polylinePositions,
+      width: 1.5,
+      material: Cesium.Color.WHITE.withAlpha(0.55)
+    }
+  });
+
+  const start = latestRouteCoords[0];
+  const end = latestRouteCoords[latestRouteCoords.length - 1];
+
+  routeEntities.add({
+    position: Cesium.Cartesian3.fromDegrees(start[1], start[0], 30000),
+    point: { pixelSize: 10, color: Cesium.Color.LIME },
+    label: {
+      text: 'START',
+      font: '12px monospace',
+      fillColor: Cesium.Color.LIME,
+      pixelOffset: new Cesium.Cartesian2(0, -18)
+    }
+  });
+
+  routeEntities.add({
+    position: Cesium.Cartesian3.fromDegrees(end[1], end[0], 30000),
+    point: { pixelSize: 10, color: Cesium.Color.ORANGE },
+    label: {
+      text: 'DEST',
+      font: '12px monospace',
+      fillColor: Cesium.Color.ORANGE,
+      pixelOffset: new Cesium.Cartesian2(0, -18)
+    }
+  });
+
+  setGlobeIndiaStationaryView();
+}
+
+function getGlobeMeshLodParams(cameraHeightMeters) {
+  if (cameraHeightMeters > 20000000) {
+    return { stride: 8, maxCells: 1200, detail: 'far' };
+  }
+  if (cameraHeightMeters > 9000000) {
+    return { stride: 5, maxCells: 2200, detail: 'mid-far' };
+  }
+  if (cameraHeightMeters > 3500000) {
+    return { stride: 3, maxCells: 3400, detail: 'mid' };
+  }
+  if (cameraHeightMeters > 1400000) {
+    return { stride: 2, maxCells: 4800, detail: 'near' };
+  }
+  return { stride: 1, maxCells: 7000, detail: 'close' };
+}
+
+function scheduleGlobeMeshRefresh(force = false) {
+  if (!globeMode || !globeViewer || !globeMeshDataSource) return;
+
+  if (force) {
+    if (globeMeshRefreshTimer) {
+      clearTimeout(globeMeshRefreshTimer);
+      globeMeshRefreshTimer = null;
+    }
+    renderGlobeHexMesh(true);
+    return;
+  }
+
+  if (globeMeshRefreshTimer) return;
+  globeMeshRefreshTimer = setTimeout(() => {
+    globeMeshRefreshTimer = null;
+    renderGlobeHexMesh(false);
+  }, 140);
+}
+
+function renderGlobeHexMesh(force = false) {
+  if (!globeViewer || !globeMeshDataSource) return;
+
+  const meshEntities = globeMeshDataSource.entities;
+  if (!hexCells.length) {
+    meshEntities.removeAll();
+    globeMeshLodKey = '';
+    return;
+  }
+
+  const cameraHeight = globeViewer.camera.positionCartographic?.height || 5000000;
+  const lod = getGlobeMeshLodParams(cameraHeight);
+  const key = `${lod.stride}:${lod.maxCells}:${lod.detail}:${hexCells.length}:${activeHexRoute.length}`;
+  if (!force && key === globeMeshLodKey) return;
+  globeMeshLodKey = key;
+
+  meshEntities.removeAll();
+
+  const onPath = new Set(activeHexRoute);
+  let rendered = 0;
+
+  for (const cell of hexCells) {
+    const isRouteCell = onPath.has(cell.id);
+    if (!isRouteCell) {
+      const rank = Math.abs(cell.row) + Math.abs(cell.col);
+      if ((rank % lod.stride) !== 0) continue;
+    }
+    if (!isRouteCell && rendered >= lod.maxCells) continue;
+
+    const density = typeof cell.simulatedDensity === 'number' ? cell.simulatedDensity : cell.density;
+    const geoHeightMeters = typeof cell.geoHeightMeters === 'number'
+      ? cell.geoHeightMeters
+      : (HEX_GEO_HEIGHT_MIN_METERS + (density * (HEX_GEO_HEIGHT_MAX_METERS - HEX_GEO_HEIGHT_MIN_METERS)));
+    const fillRed = Math.round(120 + density * 120);
+    const fillGreen = Math.round(210 - density * 90);
+    const fillBlue = Math.round(240 - density * 160);
+    const fillAlpha = Math.round((isRouteCell ? 0.36 : (0.07 + density * 0.22)) * 255);
+    const lineAlpha = Math.round((isRouteCell ? 0.9 : (0.16 + density * 0.30)) * 255);
+
+    const vertices = buildHexVertices(cell.lat, cell.lon, currentHexEdgeMeters / 111320, currentHexEdgeMeters / (111320 * Math.max(0.2, Math.cos(cell.lat * Math.PI / 180))));
+    const lonLat = [];
+    for (const vertex of vertices) {
+      lonLat.push(vertex[1], vertex[0]);
+    }
+
+    meshEntities.add({
+      polygon: {
+        hierarchy: Cesium.Cartesian3.fromDegreesArray(lonLat),
+        height: isRouteCell ? HEX_GEO_HEIGHT_MAX_METERS : geoHeightMeters,
+        material: Cesium.Color.fromBytes(fillRed, fillGreen, fillBlue, fillAlpha),
+        outline: true,
+        outlineColor: isRouteCell
+          ? Cesium.Color.fromBytes(0, 0, 0, lineAlpha)
+          : Cesium.Color.fromBytes(255, 255, 255, lineAlpha)
+      }
+    });
+
+    rendered += 1;
+  }
+}
+
+function toggleGlobeMode() {
+  const canvasArea = document.querySelector('.canvas-area');
+  const mapDiv = document.getElementById('map');
+  const globeDiv = document.getElementById('globe3d');
+  const globeBtn = document.getElementById('globe-btn');
+
+  globeMode = !globeMode;
+
+  if (globeMode) {
+    if (typeof Cesium === 'undefined') {
+      globeMode = false;
+      showToast('3D globe library failed to load.', 'error');
+      return;
+    }
+
+    initGlobeViewer();
+    mapDiv.style.display = 'none';
+    globeDiv.style.display = 'block';
+    if (canvasArea) canvasArea.classList.add('globe-mode');
+    if (globeBtn) globeBtn.textContent = '2D';
+    globeAutoRotate = false;
+    const rotateBtn = document.getElementById('rotate-btn');
+    if (rotateBtn) rotateBtn.classList.remove('active');
+    setStationaryGlobeControlState(true);
+    setGlobeIndiaStationaryView();
+    renderGlobeRoute();
+    scheduleGlobeMeshRefresh(true);
+  } else {
+    globeDiv.style.display = 'none';
+    mapDiv.style.display = 'block';
+    if (canvasArea) canvasArea.classList.remove('globe-mode');
+    if (globeBtn) globeBtn.textContent = '3D';
+    setStationaryGlobeControlState(false);
+    map.invalidateSize();
+    resetView();
+  }
+}
+
+function toggleGlobeRotate() {
+  globeAutoRotate = false;
+  const btn = document.getElementById('rotate-btn');
+  if (btn) btn.classList.remove('active');
+  if (globeMode) showToast('Globe is locked in stationary India view.', 'info');
+}
+
+function toggleGlobeLighting() {
+  if (!globeViewer) {
+    initGlobeViewer();
+    if (!globeViewer) return;
+  }
+  globeNightMode = !globeNightMode;
+  globeViewer.scene.globe.enableLighting = globeNightMode;
+  const btn = document.getElementById('light-btn');
+  if (btn) {
+    btn.classList.toggle('active', globeNightMode);
+    btn.textContent = globeNightMode ? 'NITE' : 'DAY';
+  }
+}
+
+function startRouteFlythrough() {
+  if (globeMode) {
+    showToast('Flythrough is disabled while globe is stationary.', 'info');
+    return;
+  }
+
+  if (!globeViewer || !latestRouteCoords.length) {
+    showToast('No route available for flythrough.', 'warn');
+    return;
+  }
+
+  const step = Math.max(1, Math.floor(latestRouteCoords.length / 8));
+  const samples = [];
+  for (let i = 0; i < latestRouteCoords.length; i += step) {
+    samples.push(latestRouteCoords[i]);
+  }
+  if (samples[samples.length - 1] !== latestRouteCoords[latestRouteCoords.length - 1]) {
+    samples.push(latestRouteCoords[latestRouteCoords.length - 1]);
+  }
+
+  let idx = 0;
+  const flyNext = () => {
+    if (idx >= samples.length) return;
+    const p = samples[idx];
+    globeViewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(p[1], p[0], 1600000),
+      orientation: {
+        heading: globeViewer.camera.heading,
+        pitch: Cesium.Math.toRadians(-45),
+        roll: 0
+      },
+      duration: 0.9,
+      complete: () => {
+        idx += 1;
+        flyNext();
+      }
+    });
+  };
+
+  flyNext();
+}
+
 function fract(v) {
   return v - Math.floor(v);
 }
 
 function getHexSizeDegForZoom(zoom) {
-  const maxRadius = 14;
-  const minRadius = 0.15;
-  const decayed = maxRadius * Math.pow(0.77, Math.max(0, zoom - 2));
-  return Math.max(minRadius, decayed * meshResolutionFactor);
+  const centerLat = map ? map.getCenter().lat : 0;
+
+  // Core model concept: represent the globe as a hex partition where
+  // each hex edge is constrained to 50-100 meters.
+  const zoomAdaptive = HEX_EDGE_MAX_METERS - ((Math.max(2, Math.min(20, zoom)) - 2) * 2.5);
+  const baseMeters = Math.max(HEX_EDGE_MIN_METERS, Math.min(HEX_EDGE_MAX_METERS, zoomAdaptive));
+
+  // Higher refinement factor creates smaller cells.
+  const refinedMeters = Math.max(HEX_EDGE_MIN_METERS, Math.min(HEX_EDGE_MAX_METERS, baseMeters / meshResolutionFactor));
+  currentHexEdgeMeters = refinedMeters;
+
+  const metersPerDegreeLat = 111320;
+  const latAdjust = Math.max(0.2, Math.cos(centerLat * Math.PI / 180));
+  const metersPerDegreeLon = metersPerDegreeLat * latAdjust;
+
+  const radiusLat = refinedMeters / metersPerDegreeLat;
+  const radiusLon = refinedMeters / metersPerDegreeLon;
+  return { radiusLat, radiusLon, edgeMeters: refinedMeters };
 }
 
 function computeHexDensityLocal(row, col) {
@@ -139,12 +596,24 @@ function computeHexDensityLocal(row, col) {
   return density;
 }
 
-async function fetchMeshDensities(cells) {
+function simulateHexCellMetrics(row, col, densityOverride) {
+  const density = typeof densityOverride === 'number'
+    ? Math.max(0, Math.min(1, densityOverride))
+    : computeHexDensityLocal(row, col);
+  const geoHeightMeters = HEX_GEO_HEIGHT_MIN_METERS + (density * (HEX_GEO_HEIGHT_MAX_METERS - HEX_GEO_HEIGHT_MIN_METERS));
+  return { density, geoHeightMeters };
+}
+
+async function fetchMeshDensities(cells, zoomLevel, edgeMeters) {
   try {
     const res = await fetch(`${API}/mesh/density`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cells })
+      body: JSON.stringify({
+        cells,
+        zoom_level: zoomLevel,
+        edge_meters: edgeMeters
+      })
     });
     const payload = await res.json();
     if (typeof payload.intensity === 'number') meshTrafficIntensity = payload.intensity;
@@ -189,18 +658,24 @@ async function refreshHexMesh() {
   hexLayer.clearLayers();
   hexCells = [];
   hexCellById = new Map();
+  if (globeMeshDataSource) {
+    globeMeshDataSource.entities.removeAll();
+    globeMeshLodKey = '';
+  }
 
   const zoom = map.getZoom();
   const b = map.getBounds();
   const centerLat = map.getCenter().lat;
 
-  const radiusLat = getHexSizeDegForZoom(zoom);
-  const lonAdjust = Math.max(0.2, Math.cos(centerLat * Math.PI / 180));
-  const radiusLon = radiusLat / lonAdjust;
+  const size = getHexSizeDegForZoom(zoom);
+  const radiusLat = size.radiusLat;
+  const radiusLon = size.radiusLon;
 
   const stepX = Math.sqrt(3) * radiusLon;
   const stepY = 1.5 * radiusLat;
 
+  // Row/column indices are world-space hex coordinates, so this is a
+  // viewport window over one global hex mesh partition.
   const rowStart = Math.floor((b.getSouth() - (3 * radiusLat)) / stepY);
   const rowEnd = Math.ceil((b.getNorth() + (3 * radiusLat)) / stepY);
 
@@ -225,11 +700,16 @@ async function refreshHexMesh() {
     }
   }
 
-  const densityMap = await fetchMeshDensities(skeletonCells.map(c => ({ row: c.row, col: c.col })));
+  const densityMap = await fetchMeshDensities(
+    skeletonCells.map(c => ({ row: c.row, col: c.col })),
+    zoom,
+    size.edgeMeters
+  );
   if (renderToken !== meshRenderVersion) return;
 
-  for (const c of skeletonCells) {
-      const density = densityMap ? (densityMap.get(c.id) ?? computeHexDensityLocal(c.row, c.col)) : computeHexDensityLocal(c.row, c.col);
+    for (const c of skeletonCells) {
+      const simulated = simulateHexCellMetrics(c.row, c.col, densityMap ? densityMap.get(c.id) : undefined);
+      const density = simulated.density;
       const lineOpacity = 0.08 + (density * 0.24);
       const fillOpacity = 0.025 + (density * 0.10);
       const fillRed = Math.round(120 + density * 120);
@@ -245,7 +725,7 @@ async function refreshHexMesh() {
 
       polygon.on('click', () => {
         const trafficPercent = Math.round(density * 100);
-        showToast(`Hex density: ${trafficPercent}%`, 'info');
+        showToast(`Hex density: ${trafficPercent}% | height: ${Math.round(simulated.geoHeightMeters)}m`, 'info');
       });
 
       const cell = {
@@ -255,6 +735,8 @@ async function refreshHexMesh() {
         lat: c.lat,
         lon: c.lon,
         density,
+        simulatedDensity: density,
+        geoHeightMeters: simulated.geoHeightMeters,
         neighbors: [],
         layer: polygon
       };
@@ -272,13 +754,14 @@ async function refreshHexMesh() {
   }
 
   highlightHexRoute(activeHexRoute);
+  scheduleGlobeMeshRefresh(true);
 }
 
 function setHexResolution(rawValue) {
   const pct = Number(rawValue);
   meshResolutionFactor = Math.max(0.6, Math.min(1.8, pct / 100));
   const val = document.getElementById('mesh-refine-val');
-  if (val) val.textContent = `${meshResolutionFactor.toFixed(2)}x`;
+  if (val) val.textContent = `${currentHexEdgeMeters.toFixed(0)}m`;
   refreshHexMesh();
 }
 
@@ -345,7 +828,8 @@ function reconstructHexPath(prev, srcId, dstId) {
 function getHexHopCost(fromCell, toCell, cellPenalty = {}) {
   const hopKm = haversineDist(fromCell.lat, fromCell.lon, toCell.lat, toCell.lon);
   const penalty = cellPenalty[toCell.id] || 0;
-  const trafficCost = 1 + (toCell.density * 2.6) + (penalty * 0.9);
+  const density = typeof toCell.simulatedDensity === 'number' ? toCell.simulatedDensity : toCell.density;
+  const trafficCost = 1 + (density * 2.6) + (penalty * 0.9);
   return {
     hopKm,
     weighted: hopKm * trafficCost
@@ -365,7 +849,7 @@ function summarizeHexPath(pathIds) {
       const hop = getHexHopCost(a, b);
       rawDistance += hop.hopKm;
       weightedDistance += hop.weighted;
-      avgDensity += b.density;
+      avgDensity += typeof b.simulatedDensity === 'number' ? b.simulatedDensity : b.density;
     }
     avgDensity = avgDensity / (pathIds.length - 1);
   }
@@ -508,6 +992,8 @@ function highlightHexRoute(pathIds) {
       });
     }
   }
+
+  scheduleGlobeMeshRefresh(true);
 }
 
 function hashText32(text) {
@@ -584,6 +1070,7 @@ function drawHexRoute(srcGeo, dstGeo, routeResult) {
     if (cell) coords.push([cell.lat, cell.lon]);
   }
   coords.push([dstGeo.lat, dstGeo.lon]);
+  latestRouteCoords = coords;
 
   coords.forEach(c => bounds.extend(c));
 
@@ -603,6 +1090,7 @@ function drawHexRoute(srcGeo, dstGeo, routeResult) {
   nodeMarkers['dst'] = dM;
 
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [50, 50] });
+  if (globeMode) renderGlobeRoute();
 }
 
 function renderHexRouteResult(srcGeo, dstGeo, routeResult, algo) {
@@ -839,9 +1327,29 @@ function showNodeInfo(node) {
 Connections: ${connections.substring(0,80)}`, 'info');
 }
 
-function zoomIn() { map.zoomIn(); }
-function zoomOut() { map.zoomOut(); }
-function resetView() { if(bounds && bounds.isValid()) map.fitBounds(bounds, {padding: [50, 50]}); }
+function zoomIn() {
+  if (globeMode && globeViewer) {
+    showToast('Zoom is disabled in stationary globe mode.', 'info');
+    return;
+  }
+  map.zoomIn();
+}
+
+function zoomOut() {
+  if (globeMode && globeViewer) {
+    showToast('Zoom is disabled in stationary globe mode.', 'info');
+    return;
+  }
+  map.zoomOut();
+}
+
+function resetView() {
+  if (globeMode && globeViewer) {
+    setGlobeIndiaStationaryView();
+    return;
+  }
+  if(bounds && bounds.isValid()) map.fitBounds(bounds, {padding: [50, 50]});
+}
 let animationPaused = false;
 function toggleAnimation() {
   animationPaused = !animationPaused;
@@ -1226,6 +1734,7 @@ function drawAllMultiRoutes() {
     coords.forEach(c => bounds.extend(c));
 
     if (isSelected) {
+      latestRouteCoords = coords;
       edgeLines.push(L.polyline(coords, { color: '#ffffff', weight: 12, opacity: 0.5 }).addTo(map));
       edgeLines.push(L.polyline(coords, { color: '#000000', weight: 6,  opacity: 1.0 }).addTo(map));
       highlightHexRoute(r.pathIds);
@@ -1251,6 +1760,7 @@ function drawAllMultiRoutes() {
   }
 
   if (bounds.isValid()) map.fitBounds(bounds, { padding: [60, 60] });
+  if (globeMode) renderGlobeRoute();
 }
 
 function renderMultiRoutesOSRM() {

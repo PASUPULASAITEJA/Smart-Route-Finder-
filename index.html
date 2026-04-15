@@ -8,6 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/cesium@1.118/Build/Cesium/Widgets/widgets.css" />
+<script src="https://unpkg.com/cesium@1.118/Build/Cesium/Cesium.js"></script>
 <link rel="stylesheet" href="styles.css" />
 
 </head>
@@ -17,7 +19,7 @@
   <!-- HEADER -->
   <header>
     <div class="logo">
-      <div class="logo-icon">=ƒù¦n+Å</div>
+      <div class="logo-icon">RF</div>
       <div class="logo-text">RouteFinder</div>
     </div>
     <div class="header-nav">
@@ -34,10 +36,10 @@
     <!-- SIDEBAR -->
     <aside class="sidebar">
 
-      <!-- GöÇGöÇ ROUTE FINDER GöÇGöÇ -->
+      <!-- ROUTE FINDER -->
       <div id="section-route" class="tab-content active">
         <div class="card">
-          <div class="card-header"><span>=ƒôì</span> FIND ROUTE</div>
+          <div class="card-header"><span>RF</span> FIND ROUTE</div>
 
           <div class="field">
             <label>Source</label>
@@ -63,7 +65,7 @@
           </div>
 
           <button class="btn btn-primary" onclick="findRoute()" id="find-btn">
-            <span id="find-btn-text">GÜí FIND PATH</span>
+            <span id="find-btn-text">FIND PATH</span>
           </button>
         </div>
 
@@ -71,10 +73,10 @@
         <div id="route-result"></div>
       </div>
 
-      <!-- GöÇGöÇ COMPARE GöÇGöÇ -->
+      <!-- COMPARE -->
       <div id="section-compare" class="tab-content">
         <div class="card">
-          <div class="card-header"><span>GÜûn+Å</span> ALGORITHM COMPARISON</div>
+          <div class="card-header"><span>CMP</span> ALGORITHM COMPARISON</div>
           <div class="field">
             <label>Source</label>
             <input type="text" id="cmp-src" placeholder="e.g. New York" style="background:var(--surface3);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-head);font-size:14px;padding:10px 12px;width:100%;outline:none;" />
@@ -83,15 +85,15 @@
             <label>Destination</label>
             <input type="text" id="cmp-dst" placeholder="e.g. London" style="background:var(--surface3);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-head);font-size:14px;padding:10px 12px;width:100%;outline:none;" />
           </div>
-          <button class="btn btn-primary" onclick="compareAlgos()">GÜûn+Å COMPARE ALL 4 ALGORITHMS</button>
+          <button class="btn btn-primary" onclick="compareAlgos()">COMPARE ALL 4 ALGORITHMS</button>
         </div>
         <div id="compare-result"></div>
       </div>
 
-      <!-- GöÇGöÇ MULTI ROUTE GöÇGöÇ -->
+      <!-- MULTI ROUTE -->
       <div id="section-multi" class="tab-content">
         <div class="card">
-          <div class="card-header"><span>=ƒ¢ún+Å</span> ALTERNATIVE ROUTES</div>
+          <div class="card-header"><span>MR</span> ALTERNATIVE ROUTES</div>
           <div class="field">
             <label>Source</label>
             <input type="text" id="multi-src" placeholder="e.g. Paris" style="background:var(--surface3);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:var(--font-head);font-size:14px;padding:10px 12px;width:100%;outline:none;" />
@@ -108,15 +110,15 @@
               <option value="4">4 routes</option>
             </select>
           </div>
-          <button class="btn btn-primary" onclick="findMultiRoute()">=ƒ¢ún+Å FIND ALTERNATIVES</button>
+          <button class="btn btn-primary" onclick="findMultiRoute()">FIND ALTERNATIVES</button>
         </div>
         <div id="multi-result"></div>
       </div>
 
-      <!-- GöÇGöÇ TRAFFIC GöÇGöÇ -->
+      <!-- TRAFFIC -->
       <div id="section-traffic" class="tab-content">
         <div class="card">
-          <div class="card-header"><span>=ƒÜª</span> TRAFFIC SIMULATION</div>
+          <div class="card-header"><span>TRF</span> TRAFFIC SIMULATION</div>
           <p style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">
             Simulate real-world traffic conditions by dynamically adjusting edge weights across the network.
           </p>
@@ -138,7 +140,7 @@
               <label>Hex Refinement</label>
               <input type="range" id="mesh-refine-slider" min="60" max="180" value="100"
                      oninput="setHexRefinement(this.value)">
-              <span id="mesh-refine-val">1.00x</span>
+              <span id="mesh-refine-val">75m</span>
             </div>
             <div class="field">
               <label>Density Pattern</label>
@@ -153,11 +155,11 @@
               <button class="btn btn-primary" onclick="applySyntheticDesignControls()">Apply Design</button>
             </div>
           </div>
-          <button class="btn btn-warn" onclick="simulateTraffic()">=ƒÜª SIMULATE TRAFFIC</button>
-          <button class="btn btn-danger" onclick="resetConditions()">Gå¦ RESET ALL CONDITIONS</button>
+          <button class="btn btn-warn" onclick="simulateTraffic()">SIMULATE TRAFFIC</button>
+          <button class="btn btn-danger" onclick="resetConditions()">RESET ALL CONDITIONS</button>
 
           <div style="margin-top:16px">
-            <div class="card-header"><span>=ƒÜº</span> BLOCK ROAD</div>
+            <div class="card-header"><span>BLK</span> BLOCK ROAD</div>
             <div class="field">
               <label>From</label>
               <input type="text" id="block-from" placeholder="City" style="background:var(--surface3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px;width:100%;" />
@@ -166,19 +168,19 @@
               <label>To</label>
               <input type="text" id="block-to" placeholder="City" style="background:var(--surface3);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:10px;width:100%;" />
             </div>
-            <button class="btn btn-danger" onclick="blockRoad()">=ƒÜº BLOCK THIS ROAD</button>
+            <button class="btn btn-danger" onclick="blockRoad()">BLOCK THIS ROAD</button>
           </div>
         </div>
         <div id="traffic-result"></div>
       </div>
 
-      <!-- GöÇGöÇ HISTORY GöÇGöÇ -->
+      <!-- HISTORY -->
       <div id="section-history" class="tab-content">
         <div class="card">
-          <div class="card-header"><span>=ƒô£</span> ROUTE HISTORY</div>
+          <div class="card-header"><span>HIS</span> ROUTE HISTORY</div>
           <div class="btn-row">
-            <button class="btn btn-secondary" onclick="loadHistory()">Gå+ REFRESH</button>
-            <button class="btn btn-danger" onclick="clearHistory()">G£ò CLEAR</button>
+            <button class="btn btn-secondary" onclick="loadHistory()">REFRESH</button>
+            <button class="btn btn-danger" onclick="clearHistory()">CLEAR</button>
           </div>
         </div>
         <div id="history-list" style="margin-top:8px"></div>
@@ -189,12 +191,17 @@
     <!-- CANVAS AREA -->
     <div class="canvas-area">
       <div id="map"></div>
+      <div id="globe3d"></div>
 
       <div class="canvas-controls">
         <button class="ctrl-btn" onclick="zoomIn()" title="Zoom In">+</button>
-        <button class="ctrl-btn" onclick="zoomOut()" title="Zoom Out">GêÆ</button>
-        <button class="ctrl-btn" onclick="resetView()" title="Reset View">Gîé</button>
-        <button class="ctrl-btn" onclick="toggleAnimation()" id="anim-btn" title="Pause/Play">GÅ+</button>
+        <button class="ctrl-btn" onclick="zoomOut()" title="Zoom Out">-</button>
+        <button class="ctrl-btn" onclick="resetView()" title="Reset View">RST</button>
+        <button class="ctrl-btn" onclick="toggleAnimation()" id="anim-btn" title="Pause/Play">PLY</button>
+        <button class="ctrl-btn" onclick="toggleGlobeMode()" id="globe-btn" title="2D/3D View">3D</button>
+        <button class="ctrl-btn" onclick="toggleGlobeRotate()" id="rotate-btn" title="Auto Rotate">ROT</button>
+        <button class="ctrl-btn" onclick="toggleGlobeLighting()" id="light-btn" title="Day/Night">NITE</button>
+        <button class="ctrl-btn" onclick="startRouteFlythrough()" id="fly-btn" title="Route Flythrough">FLY</button>
       </div>
 
       <div class="canvas-legend">
@@ -215,7 +222,7 @@
       </div>
 
       <div class="canvas-hint">
-        Drag to pan -+ Scroll to zoom -+ Click node to inspect
+        Drag to pan | Scroll to zoom | Click node to inspect
       </div>
     </div>
   </div>
